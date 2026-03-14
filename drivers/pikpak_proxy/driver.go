@@ -1,4 +1,4 @@
-package PikPakProxy
+package pikpakproxy
 
 import (
 	"context"
@@ -8,12 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alist-org/alist/v3/drivers/base"
-	"github.com/alist-org/alist/v3/internal/driver"
-	"github.com/alist-org/alist/v3/internal/model"
-	"github.com/alist-org/alist/v3/internal/op"
-	"github.com/alist-org/alist/v3/pkg/utils"
-	hash_extend "github.com/alist-org/alist/v3/pkg/utils/hash"
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	streamPkg "github.com/OpenListTeam/OpenList/v4/internal/stream"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	hash_extend "github.com/OpenListTeam/OpenList/v4/pkg/utils/hash"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
@@ -35,7 +36,6 @@ func (d *PikPakProxy) GetAddition() driver.Additional {
 }
 
 func (d *PikPakProxy) Init(ctx context.Context) (err error) {
-
 	if d.Common == nil {
 		d.Common = &Common{
 			client:       base.NewRestyClient(),
@@ -142,7 +142,8 @@ func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkA
 	}
 	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
-			req.SetQueryParams(queryParams)
+			req.SetContext(ctx).
+				SetQueryParams(queryParams)
 		}, &resp)
 	if err != nil {
 		return nil, err
@@ -153,7 +154,6 @@ func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkA
 		log.Debugln("use media link")
 		url = resp.Medias[0].Link.Url
 	}
-
 	if d.Addition.UseProxy {
 		if strings.HasSuffix(d.Addition.ProxyUrl, "/") {
 			url = d.Addition.ProxyUrl + url
@@ -170,7 +170,7 @@ func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkA
 
 func (d *PikPakProxy) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(base.Json{
+		req.SetContext(ctx).SetBody(base.Json{
 			"kind":      "drive#folder",
 			"parent_id": parentDir.GetID(),
 			"name":      dirName,
@@ -181,7 +181,7 @@ func (d *PikPakProxy) MakeDir(ctx context.Context, parentDir model.Obj, dirName 
 
 func (d *PikPakProxy) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchMove", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(base.Json{
+		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
 			"to": base.Json{
 				"parent_id": dstDir.GetID(),
@@ -193,7 +193,7 @@ func (d *PikPakProxy) Move(ctx context.Context, srcObj, dstDir model.Obj) error 
 
 func (d *PikPakProxy) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files/"+srcObj.GetID(), http.MethodPatch, func(req *resty.Request) {
-		req.SetBody(base.Json{
+		req.SetContext(ctx).SetBody(base.Json{
 			"name": newName,
 		})
 	}, nil)
@@ -202,7 +202,7 @@ func (d *PikPakProxy) Rename(ctx context.Context, srcObj model.Obj, newName stri
 
 func (d *PikPakProxy) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchCopy", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(base.Json{
+		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
 			"to": base.Json{
 				"parent_id": dstDir.GetID(),
@@ -213,9 +213,8 @@ func (d *PikPakProxy) Copy(ctx context.Context, srcObj, dstDir model.Obj) error 
 }
 
 func (d *PikPakProxy) Remove(ctx context.Context, obj model.Obj) error {
-	// https://api-drive.mypikpak.com/drive/v1/files:batchTrash
-	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchDelete", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(base.Json{
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchTrash", http.MethodPost, func(req *resty.Request) {
+		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{obj.GetID()},
 		})
 	}, nil)
@@ -223,15 +222,11 @@ func (d *PikPakProxy) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *PikPakProxy) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	hi := stream.GetHash()
-	sha1Str := hi.GetHash(hash_extend.GCID)
-	if len(sha1Str) < hash_extend.GCID.Width {
-		tFile, err := stream.CacheFullInTempFile()
-		if err != nil {
-			return err
-		}
+	sha1Str := stream.GetHash().GetHash(hash_extend.GCID)
 
-		sha1Str, err = utils.HashFile(hash_extend.GCID, tFile, stream.GetSize())
+	if len(sha1Str) < hash_extend.GCID.Width {
+		var err error
+		_, sha1Str, err = streamPkg.CacheFullAndHash(stream, &up, hash_extend.GCID, stream.GetSize())
 		if err != nil {
 			return err
 		}
@@ -261,52 +256,66 @@ func (d *PikPakProxy) Put(ctx context.Context, dstDir model.Obj, stream model.Fi
 	}
 
 	params := resp.Resumable.Params
-	//endpoint := strings.Join(strings.Split(params.Endpoint, ".")[1:], ".")
+	// endpoint := strings.Join(strings.Split(params.Endpoint, ".")[1:], ".")
 	// web 端上传 返回的endpoint 为 `mypikpak.net` | android 端上传 返回的endpoint 为 `vip-lixian-07.mypikpak.net`·
 	if d.Addition.Platform == "android" {
 		params.Endpoint = "mypikpak.net"
 	}
 
 	if stream.GetSize() <= 10*utils.MB { // 文件大小 小于10MB，改用普通模式上传
-		return d.UploadByOSS(&params, stream, up)
+		return d.UploadByOSS(ctx, &params, stream, up)
 	}
 	// 分片上传
-	return d.UploadByMultipart(&params, stream.GetSize(), stream, up)
+	return d.UploadByMultipart(ctx, &params, stream.GetSize(), stream, up)
 }
 
-// 离线下载文件
-func (d *PikPakProxy) Offline(ctx context.Context, args model.OtherArgs) (interface{}, error) {
-	requestBody := base.Json{
-		"kind":        "drive#file",
-		"name":        "",
-		"upload_type": "UPLOAD_TYPE_URL",
-		"url": base.Json{
-			"url": args.Data,
-		},
-		"parent_id":   args.Obj.GetID(),
-		"folder_type": "",
-	}
-
-	_, err := d.requestWithCaptchaToken("https://api-drive.mypikpak.com/drive/v1/files",
-		http.MethodPost, func(r *resty.Request) {
-			r.SetContext(ctx)
-			r.SetBody(requestBody)
-		}, nil)
+func (d *PikPakProxy) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	var about AboutResponse
+	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/about", http.MethodGet, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, &about)
 	if err != nil {
 		return nil, err
 	}
-	return "ok", nil
+	total, err := strconv.ParseInt(about.Quota.Limit, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	used, err := strconv.ParseInt(about.Quota.Usage, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
+}
 
-	// var resp OfflineDownloadResp
-	// _, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
-	// 	req.SetBody(requestBody)
-	// }, &resp)
+// 离线下载文件
+func (d *PikPakProxy) OfflineDownload(ctx context.Context, fileUrl string, parentDir model.Obj, fileName string) (*OfflineTask, error) {
+	requestBody := base.Json{
+		"kind":        "drive#file",
+		"name":        fileName,
+		"upload_type": "UPLOAD_TYPE_URL",
+		"url": base.Json{
+			"url": fileUrl,
+		},
+		"parent_id":   parentDir.GetID(),
+		"folder_type": "",
+	}
 
-	// if err != nil {
-	// 	return nil, err
-	// }
+	var resp OfflineDownloadResp
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
+		req.SetContext(ctx).
+			SetBody(requestBody)
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
 
-	//return &resp.Task, err
+	return &resp.Task, err
 }
 
 /*
@@ -348,7 +357,6 @@ func (d *PikPakProxy) OfflineList(ctx context.Context, nextPageToken string, pha
 		req.SetContext(ctx).
 			SetQueryParams(params)
 	}, &resp)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to get offline list: %w", err)
 	}
