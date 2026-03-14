@@ -1,4 +1,4 @@
-package pikpak
+package pikpakproxy
 
 import (
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -14,15 +14,19 @@ type Addition struct {
 	CaptchaToken     string `json:"captcha_token" default:""`
 	DeviceID         string `json:"device_id"  required:"false" default:""`
 	DisableMediaLink bool   `json:"disable_media_link" default:"true"`
+	//是否使用代理
+	UseProxy bool `json:"use_proxy"`
+	//下代理地址
+	ProxyUrl string `json:"proxy_url" default:""`
 }
 
 var config = driver.Config{
-	Name:      "PikPak",
+	Name:      "PikPakProxy",
 	LocalSort: true,
 }
 
 func init() {
 	op.RegisterDriver(func() driver.Driver {
-		return &PikPak{}
+		return &PikPakProxy{}
 	})
 }
