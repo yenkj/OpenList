@@ -57,6 +57,7 @@ import (
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/openlist"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/openlist_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/pikpak"
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/pikpak_proxy"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/pikpak_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/proton_drive"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/quark_open"
