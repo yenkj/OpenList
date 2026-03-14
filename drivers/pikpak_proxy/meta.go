@@ -1,8 +1,8 @@
-package PikPakProxy
+package pikpak
 
 import (
-	"github.com/alist-org/alist/v3/internal/driver"
-	"github.com/alist-org/alist/v3/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 )
 
 type Addition struct {
@@ -14,20 +14,15 @@ type Addition struct {
 	CaptchaToken     string `json:"captcha_token" default:""`
 	DeviceID         string `json:"device_id"  required:"false" default:""`
 	DisableMediaLink bool   `json:"disable_media_link" default:"true"`
-	//是否使用代理
-	UseProxy bool `json:"use_proxy"`
-	//下代理地址
-	ProxyUrl string `json:"proxy_url" default:""`
 }
 
 var config = driver.Config{
-	Name:        "PikPakProxy",
-	LocalSort:   true,
-	DefaultRoot: "",
+	Name:      "PikPak",
+	LocalSort: true,
 }
 
 func init() {
 	op.RegisterDriver(func() driver.Driver {
-		return &PikPakProxy{}
+		return &PikPak{}
 	})
 }
