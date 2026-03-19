@@ -135,9 +135,6 @@ func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		"usage":          "FETCH",
 		"thumbnail_size": "SIZE_LARGE",
 	}
-	if !d.DisableMediaLink {
-		queryParams["usage"] = "CACHE"
-	}
 	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
 			req.SetContext(ctx).
