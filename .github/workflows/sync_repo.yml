@@ -1,9 +1,9 @@
 name: Sync to Gitee
 
 on:
-  push:
-    branches:
-      - main
+#  push:                  <-- 如果不想每次 Push 都同步，就注释掉
+#    branches:
+#      - main
   workflow_dispatch:
 
 jobs:
