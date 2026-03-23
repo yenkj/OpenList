@@ -1,9 +1,9 @@
 name: Beta Release builds
 
 on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
+#  push:                <-- 注释掉 push 触发，防止每次提交代码都运行
+#    branches: ["main"]
+  workflow_dispatch:      # 保留手动触发按钮
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
