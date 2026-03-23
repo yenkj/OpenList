@@ -131,36 +131,67 @@ func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListAr
 
 func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
-	var url string
-	queryParams := map[string]string{
-		"_magic":         "2021",
-		"usage":          "FETCH",
-		"thumbnail_size": "SIZE_LARGE",
-	}
+	
+	// 1. 初始策略：如果全局未禁用，先尝试用 CACHE 模式（为了拿到 Category 识别身份）
+	usage := "FETCH"
 	if !d.DisableMediaLink {
-		queryParams["usage"] = "CACHE"
+		usage = "CACHE"
 	}
-	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
-		http.MethodGet, func(req *resty.Request) {
-			req.SetContext(ctx).
-				SetQueryParams(queryParams)
-		}, &resp)
+
+	// 定义内部请求闭包，方便复用
+	fetchFileDetail := func(currentUsage string) (File, error) {
+		var f File
+		queryParams := map[string]string{
+			"_magic":         "2021",
+			"usage":          currentUsage,
+			"thumbnail_size": "SIZE_LARGE",
+		}
+		_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
+			http.MethodGet, func(req *resty.Request) {
+				req.SetContext(ctx).SetQueryParams(queryParams)
+			}, &f)
+		return f, err
+	}
+
+	// 执行第一次请求
+	resp, err := fetchFileDetail(usage)
 	if err != nil {
 		return nil, err
 	}
-	url = resp.WebContentLink
 
-	if !d.DisableMediaLink && len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
-		log.Debugln("use media link")
-		url = resp.Medias[0].Link.Url
-	}
-	if d.Addition.UseProxy {
-		if strings.HasSuffix(d.Addition.ProxyUrl, "/") {
-			url = d.Addition.ProxyUrl + url
+	url := resp.WebContentLink
+
+	// 2. 核心分流逻辑
+	if usage == "CACHE" {
+		// 检查 PikPak 返回的媒体分类
+		isMedia := len(resp.Medias) > 0 && (resp.Medias[0].Category == "VIDEO" || resp.Medias[0].Category == "AUDIO")
+		
+		if isMedia {
+			// 如果是视频/音频，优先使用 Medias 里的流链接
+			if resp.Medias[0].Link.Url != "" {
+				log.Debugln("使用媒体加速链接:", resp.Name)
+				url = resp.Medias[0].Link.Url
+			}
 		} else {
-			url = d.Addition.ProxyUrl + "/" + url
+			// 如果是压缩包等其他文件，但刚才用了 CACHE，会导致下载到 index.html
+			// 此时我们必须重新用 FETCH 获取“短参数”原始直链
+			log.Debugln("非媒体文件，回退到 FETCH 原始直链:", resp.Name)
+			resp, err = fetchFileDetail("FETCH")
+			if err != nil {
+				return nil, err
+			}
+			url = resp.WebContentLink
 		}
+	}
 
+	// 3. 处理代理逻辑
+	if d.Addition.UseProxy {
+		proxyUrl := d.Addition.ProxyUrl
+		if strings.HasSuffix(proxyUrl, "/") {
+			url = proxyUrl + url
+		} else {
+			url = proxyUrl + "/" + url
+		}
 	}
 
 	return &model.Link{
