@@ -1,11 +1,10 @@
 name: Release builds (Docker)
 
 on:
-  # 彻底关闭自动构建，只保留手动触发入口
   workflow_dispatch:
     inputs:
       manual_tag:
-        description: 'Tag name (like v0.1.0). Required if as_latest is true.'
+        description: 'Tag name (like v0.1.0).'
         required: false
         type: string
       as_latest:
@@ -13,12 +12,9 @@ on:
         required: true
         default: 'false'
         type: choice
-        options:
-          - 'true'
-          - 'false'
-  # push:                <-- 已注释：打 Tag 也不再自动触发构建
-  #   tags:
-  #     - 'v*'
+        options: ['true', 'false']
+  # push:                # <-- 已注释：关闭自动构建，彻底断绝非预期开销
+  #   tags: ['v*']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -30,7 +26,7 @@ env:
   REGISTRY: ghcr.io
   ARTIFACT_NAME: 'binaries_docker_release'
   ARTIFACT_NAME_LITE: 'binaries_docker_release_lite'
-  # --- 只保留 x86 架构，其余注释 ---
+  # --- 架构控制：平时只留 amd64 以节省空间，需要全平台时再取消注释 ---
   RELEASE_PLATFORMS: 'linux/amd64' 
   # RELEASE_PLATFORMS: 'linux/amd64,linux/arm64,linux/arm/v7,linux/386,linux/arm/v6,linux/ppc64le,linux/riscv64,linux/loong64'
   IMAGE_PUSH: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
@@ -49,7 +45,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.0'
-          cache: false # 注释掉或设为 false 以节省那 900MB 的缓存空间
+          cache: true # 必须开启，否则编译速度和环境依赖会出问题
+
+      # 关键修复：如果你手动删了 musl 缓存，这里必须重新下载
+      - name: Download Musl Library
+        run: bash build.sh prepare docker-multiplatform
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build go binary (release)
         run: bash build.sh release docker-multiplatform
@@ -66,7 +68,7 @@ jobs:
             build/
             !build/*.tgz
             !build/musl-libs/**
-          retention-days: 1 # 极其重要：产物只存1天，用完即丢
+          retention-days: 1 # 极其重要：产物只留1天
 
   build_binary_lite:
     name: Build Binaries for Docker Release (Lite)
@@ -74,18 +76,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.0'
-          cache: false
-
+          cache: true
+      - name: Download Musl Library
+        run: bash build.sh prepare lite docker-multiplatform
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build go binary (release)
         run: bash build.sh release lite docker-multiplatform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -103,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 只保留最基础的镜像变体
+        # --- 变体控制：只保留基础版，其余注释掉 ---
         image: ["latest"] 
         # image: ["latest", "ffmpeg", "aria2", "aio"] 
         include:
@@ -119,61 +122,9 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: 'build/'
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        if: env.IMAGE_PUSH == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.GHCR_ORG_NAME }}/${{ env.IMAGE_NAME }}
-          tags: >
-            ${{ github.event_name == 'workflow_dispatch'
-                && format('type=raw,value={0}', github.event.inputs.manual_tag)
-              || format('type=raw,value={0}', github.ref_name) }}
-          flavor: |
-            latest=${{ github.event_name == 'push' || github.event.inputs.as_latest == 'true' }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.ci
-          push: ${{ env.IMAGE_PUSH == 'true' }}
-          build-args: |
-            BASE_IMAGE_TAG=${{ matrix.base_image_tag }}
-            ${{ matrix.build_arg }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: ${{ env.RELEASE_PLATFORMS }}
-
-  release_docker_lite:
-    needs: build_binary_lite
-    name: Release Docker image (Lite)
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        image: ["latest"]
-        include:
-          - image: "latest"
-            base_image_tag: "base"
-            build_arg: ""
-            tag_favor: "suffix=-lite,onlatest=true"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT_NAME_LITE }}
-          path: 'build/'
+      # QEMU 是多平台构建必须的，如果只跑 amd64 可以注释掉以提速
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -199,6 +150,60 @@ jobs:
             latest=${{ github.event_name == 'push' || github.event.inputs.as_latest == 'true' }}
             ${{ matrix.tag_favor }}
 
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ci
+          push: ${{ env.IMAGE_PUSH == 'true' }}
+          build-args: |
+            BASE_IMAGE_TAG=${{ matrix.base_image_tag }}
+            ${{ matrix.build_arg }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ env.RELEASE_PLATFORMS }}
+
+  release_docker_lite:
+    # ... 此处逻辑同上，建议同样只保留 matrix 中的 "latest" ...
+    needs: build_binary_lite
+    name: Release Docker image (Lite)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ["latest"]
+        include:
+          - image: "latest"
+            base_image_tag: "base"
+            build_arg: ""
+            tag_favor: "suffix=-lite,onlatest=true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME_LITE }}
+          path: 'build/'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        if: env.IMAGE_PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.GHCR_ORG_NAME }}/${{ env.IMAGE_NAME }}
+          tags: >
+            ${{ github.event_name == 'workflow_dispatch'
+                && format('type=raw,value={0}', github.event.inputs.manual_tag)
+              || format('type=raw,value={0}', github.ref_name) }}
+          flavor: |
+            latest=${{ github.event_name == 'push' || github.event.inputs.as_latest == 'true' }}
+            ${{ matrix.tag_favor }}
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
