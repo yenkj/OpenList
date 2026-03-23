@@ -13,7 +13,7 @@ on:
         default: 'false'
         type: choice
         options: ['true', 'false']
-  # push:                # <-- 已注释：关闭自动构建，彻底断绝非预期开销
+  # push:                # <-- 注释掉：防止自动触发爆空间
   #   tags: ['v*']
 
 concurrency:
@@ -26,7 +26,7 @@ env:
   REGISTRY: ghcr.io
   ARTIFACT_NAME: 'binaries_docker_release'
   ARTIFACT_NAME_LITE: 'binaries_docker_release_lite'
-  # --- 架构控制：平时只留 amd64 以节省空间，需要全平台时再取消注释 ---
+  # --- 架构控制：平时只留 amd64 节省空间，需要全平台时再切换注释 ---
   RELEASE_PLATFORMS: 'linux/amd64' 
   # RELEASE_PLATFORMS: 'linux/amd64,linux/arm64,linux/arm/v7,linux/386,linux/arm/v6,linux/ppc64le,linux/riscv64,linux/loong64'
   IMAGE_PUSH: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
@@ -45,9 +45,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.0'
-          cache: true # 必须开启，否则编译速度和环境依赖会出问题
+          cache: true 
 
-      # 关键修复：如果你手动删了 musl 缓存，这里必须重新下载
       - name: Download Musl Library
         run: bash build.sh prepare docker-multiplatform
         env:
@@ -106,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # --- 变体控制：只保留基础版，其余注释掉 ---
+        # --- 变体控制：通过注释减少单次构建生成的镜像数量 ---
         image: ["latest"] 
         # image: ["latest", "ffmpeg", "aria2", "aio"] 
         include:
@@ -114,6 +113,20 @@ jobs:
             base_image_tag: "base"
             build_arg: ""
             tag_favor: ""
+          # - image: "ffmpeg"
+          #   base_image_tag: "ffmpeg"
+          #   build_arg: INSTALL_FFMPEG=true
+          #   tag_favor: "suffix=-ffmpeg,onlatest=true"
+          # - image: "aria2"
+          #   base_image_tag: "aria2"
+          #   build_arg: INSTALL_ARIA2=true
+          #   tag_favor: "suffix=-aria2,onlatest=true"
+          # - image: "aio"
+          #   base_image_tag: "aio"
+          #   build_arg: |
+          #     INSTALL_FFMPEG=true
+          #     INSTALL_ARIA2=true
+          #   tag_favor: "suffix=-aio,onlatest=true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -121,10 +134,6 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: 'build/'
-
-      # QEMU 是多平台构建必须的，如果只跑 amd64 可以注释掉以提速
-      # - name: Set up QEMU
-      #   uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -164,18 +173,32 @@ jobs:
           platforms: ${{ env.RELEASE_PLATFORMS }}
 
   release_docker_lite:
-    # ... 此处逻辑同上，建议同样只保留 matrix 中的 "latest" ...
     needs: build_binary_lite
     name: Release Docker image (Lite)
     runs-on: ubuntu-latest
     strategy:
       matrix:
         image: ["latest"]
+        # image: ["latest", "ffmpeg", "aria2", "aio"]
         include:
           - image: "latest"
             base_image_tag: "base"
             build_arg: ""
             tag_favor: "suffix=-lite,onlatest=true"
+          # - image: "ffmpeg"
+          #   base_image_tag: "ffmpeg"
+          #   build_arg: INSTALL_FFMPEG=true
+          #   tag_favor: "suffix=-lite-ffmpeg,onlatest=true"
+          # - image: "aria2"
+          #   base_image_tag: "aria2"
+          #   build_arg: INSTALL_ARIA2=true
+          #   tag_favor: "suffix=-lite-aria2,onlatest=true"
+          # - image: "aio"
+          #   base_image_tag: "aio"
+          #   build_arg: |
+          #     INSTALL_FFMPEG=true
+          #     INSTALL_ARIA2=true
+          #   tag_favor: "suffix=-lite-aio,onlatest=true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
