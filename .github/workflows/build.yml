@@ -1,8 +1,8 @@
 name: Test Build
 
 on:
-  pull_request:
-    branches: ["main"]
+#  pull_request:            <-- 注释掉，防止 PR 时自动运行
+#    branches: ["main"]
   workflow_dispatch:
 
 concurrency:
