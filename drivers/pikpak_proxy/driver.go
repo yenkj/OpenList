@@ -132,71 +132,61 @@ func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListAr
 func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
 	
-	// 1. 初始策略：如果全局未禁用，先尝试用 CACHE 模式（为了拿到 Category 识别身份）
-	usage := "FETCH"
+	// 1. 完全还原你最初的原版逻辑，不做预判，不做多余包装
+	queryParams := map[string]string{
+		"_magic":         "2021",
+		"thumbnail_size": "SIZE_LARGE",
+	}
 	if !d.DisableMediaLink {
-		usage = "CACHE"
+		queryParams["usage"] = "CACHE"
 	}
 
-	// 定义内部请求闭包，方便复用
-	fetchFileDetail := func(currentUsage string) (File, error) {
-		var f File
-		queryParams := map[string]string{
-			"_magic":         "2021",
-			"usage":          currentUsage,
-			"thumbnail_size": "SIZE_LARGE",
-		}
-		_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
-			http.MethodGet, func(req *resty.Request) {
-				req.SetContext(ctx).SetQueryParams(queryParams)
-			}, &f)
-		return f, err
-	}
-
-	// 执行第一次请求
-	resp, err := fetchFileDetail(usage)
+	// 发起请求
+	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
+		http.MethodGet, func(req *resty.Request) {
+			req.SetContext(ctx).SetQueryParams(queryParams)
+		}, &resp)
 	if err != nil {
 		return nil, err
 	}
 
 	url := resp.WebContentLink
 
-	// 2. 核心分流逻辑
-	if usage == "CACHE" {
-		// 检查 PikPak 返回的媒体分类
+	// 2. 【核心补救】只有在“关闭禁用”模式下，才检查是否需要回退
+	// 如果是压缩包等非媒体文件，由于 usage=CACHE 会导致链接变 HTML，我们才去修正它
+	if !d.DisableMediaLink {
+		// 识别是否为媒体：看 Medias 数组是否为空，或者看 Category
 		isMedia := len(resp.Medias) > 0 && (resp.Medias[0].Category == "VIDEO" || resp.Medias[0].Category == "AUDIO")
 		
 		if isMedia {
-			// 如果是视频/音频，优先使用 Medias 里的流链接
-			if resp.Medias[0].Link.Url != "" {
-				log.Debugln("使用媒体加速链接:", resp.Name)
+			// --- 视频逻辑：保持原汁原味 ---
+			// 如果 Medias 链接存在就用它，否则就用刚才那个“很快”的 WebContentLink
+			if len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
 				url = resp.Medias[0].Link.Url
 			}
 		} else {
-			// 如果是压缩包等其他文件，但刚才用了 CACHE，会导致下载到 index.html
-			// 此时我们必须重新用 FETCH 获取“短参数”原始直链
-			log.Debugln("非媒体文件，回退到 FETCH 原始直链:", resp.Name)
-			resp, err = fetchFileDetail("FETCH")
-			if err != nil {
-				return nil, err
+			// --- 非视频逻辑：为了防止 index.html，补发一次 FETCH 请求 ---
+			// 只有这部分文件会多跑一次请求，视频文件依然是“单次请求+原版链路”
+			var fetchResp File
+			_, _ = d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
+				http.MethodGet, func(req *resty.Request) {
+					req.SetContext(ctx).SetQueryParams(map[string]string{
+						"_magic": "2021",
+						"usage":  "FETCH",
+					})
+				}, &fetchResp)
+			if fetchResp.WebContentLink != "" {
+				url = fetchResp.WebContentLink
 			}
-			url = resp.WebContentLink
 		}
 	}
 
-	// 3. 处理代理逻辑
+	// 3. 处理代理
 	if d.Addition.UseProxy {
-		proxyUrl := d.Addition.ProxyUrl
-		if strings.HasSuffix(proxyUrl, "/") {
-			url = proxyUrl + url
-		} else {
-			url = proxyUrl + "/" + url
-		}
+		url = utils.JoinURL(d.Addition.ProxyUrl, url)
 	}
 
-	return &model.Link{
-		URL: url,
-	}, nil
+	return &model.Link{URL: url}, nil
 }
 
 func (d *PikPakProxy) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
