@@ -133,25 +133,19 @@ func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkA
 	var resp File
 	var url string
 	
-	// 1. 默认逻辑：跟随你的原版配置
+	// 1. 完全回归原版请求参数
 	usage := "FETCH"
 	if !d.DisableMediaLink {
 		usage = "CACHE"
 	}
 
-	// 2. 【核心修复】单独针对字幕文件：强制回退到 FETCH
-	// 只要后缀是 .srt 或 .ass，不管用户关没关“禁用”，通通给原直链
-	name := strings.ToLower(file.GetName())
-	if strings.HasSuffix(name, ".srt") || strings.HasSuffix(name, ".ass") {
-		usage = "FETCH"
-	}
-
-	// 3. 发起请求 (完全是你原版的状态)
 	queryParams := map[string]string{
 		"_magic":         "2021",
 		"usage":          usage,
 		"thumbnail_size": "SIZE_LARGE",
 	}
+
+	// 2. 发起第一次请求 (这步和原版完全一致，保证了视频拿到最快的节点)
 	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
 			req.SetContext(ctx).SetQueryParams(queryParams)
@@ -161,29 +155,39 @@ func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkA
 	}
 	url = resp.WebContentLink
 
-	// 4. 视频逻辑：维持你觉得“很快”的原版 Medias 逻辑
-	if !d.DisableMediaLink && len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
-		log.Debugln("use media link")
-		url = resp.Medias[0].Link.Url
+	// 3. 核心分流：针对“非视频”且“开启了加速”的情况做补救
+	if usage == "CACHE" {
+		// 只有视频/音频才算真正的 Media
+		isMedia := len(resp.Medias) > 0 && (resp.Medias[0].Category == "VIDEO" || resp.Medias[0].Category == "AUDIO")
+		
+		if isMedia {
+			// 视频：直接用 Medias 链接（这就是你觉得快的那个）
+			if resp.Medias[0].Link.Url != "" {
+				url = resp.Medias[0].Link.Url
+			}
+		} else {
+			// 图片、字幕、压缩包：它们在 CACHE 下会变 HTML，所以必须补救
+			// 只有这些文件会多花一点时间去重新获取 FETCH 链接
+			var fetchResp File
+			_, _ = d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
+				http.MethodGet, func(req *resty.Request) {
+					req.SetContext(ctx).SetQueryParams(map[string]string{
+						"_magic": "2021",
+						"usage":  "FETCH",
+					})
+				}, &fetchResp)
+			if fetchResp.WebContentLink != "" {
+				url = fetchResp.WebContentLink
+			}
+		}
 	}
 
-	// 5. 代理逻辑 (修正原版拼接)
+	// 4. 代理逻辑 (使用最简单的拼接，防止 utils.JoinURL 报错)
 	if d.Addition.UseProxy {
-		proxyUrl := strings.TrimSuffix(d.Addition.ProxyUrl, "/")
-		targetUrl := strings.TrimPrefix(url, "/")
-		url = proxyUrl + "/" + targetUrl
+		url = strings.TrimSuffix(d.Addition.ProxyUrl, "/") + "/" + strings.TrimPrefix(url, "/")
 	}
 
 	return &model.Link{URL: url}, nil
-}
-
-func (d *PikPakProxy) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files/"+srcObj.GetID(), http.MethodPatch, func(req *resty.Request) {
-		req.SetContext(ctx).SetBody(base.Json{
-			"name": newName,
-		})
-	}, nil)
-	return err
 }
 
 func (d *PikPakProxy) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
