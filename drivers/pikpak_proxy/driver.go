@@ -131,17 +131,27 @@ func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListAr
 
 func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
+	var url string
 	
-	// 1. 完全还原你最初的原版逻辑，不做预判，不做多余包装
-	queryParams := map[string]string{
-		"_magic":         "2021",
-		"thumbnail_size": "SIZE_LARGE",
-	}
+	// 1. 默认逻辑：跟随你的原版配置
+	usage := "FETCH"
 	if !d.DisableMediaLink {
-		queryParams["usage"] = "CACHE"
+		usage = "CACHE"
 	}
 
-	// 发起请求
+	// 2. 【核心修复】单独针对字幕文件：强制回退到 FETCH
+	// 只要后缀是 .srt 或 .ass，不管用户关没关“禁用”，通通给原直链
+	name := strings.ToLower(file.GetName())
+	if strings.HasSuffix(name, ".srt") || strings.HasSuffix(name, ".ass") {
+		usage = "FETCH"
+	}
+
+	// 3. 发起请求 (完全是你原版的状态)
+	queryParams := map[string]string{
+		"_magic":         "2021",
+		"usage":          usage,
+		"thumbnail_size": "SIZE_LARGE",
+	}
 	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
 			req.SetContext(ctx).SetQueryParams(queryParams)
@@ -149,67 +159,22 @@ func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkA
 	if err != nil {
 		return nil, err
 	}
+	url = resp.WebContentLink
 
-	url := resp.WebContentLink
-
-	// 2. 【核心补救】只有在“关闭禁用”模式下，才检查是否需要回退
-	// 如果是压缩包等非媒体文件，由于 usage=CACHE 会导致链接变 HTML，我们才去修正它
-	if !d.DisableMediaLink {
-		// 识别是否为媒体：看 Medias 数组是否为空，或者看 Category
-		isMedia := len(resp.Medias) > 0 && (resp.Medias[0].Category == "VIDEO" || resp.Medias[0].Category == "AUDIO")
-		
-		if isMedia {
-			// --- 视频逻辑：保持原汁原味 ---
-			// 如果 Medias 链接存在就用它，否则就用刚才那个“很快”的 WebContentLink
-			if len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
-				url = resp.Medias[0].Link.Url
-			}
-		} else {
-			// --- 非视频逻辑：为了防止 index.html，补发一次 FETCH 请求 ---
-			// 只有这部分文件会多跑一次请求，视频文件依然是“单次请求+原版链路”
-			var fetchResp File
-			_, _ = d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
-				http.MethodGet, func(req *resty.Request) {
-					req.SetContext(ctx).SetQueryParams(map[string]string{
-						"_magic": "2021",
-						"usage":  "FETCH",
-					})
-				}, &fetchResp)
-			if fetchResp.WebContentLink != "" {
-				url = fetchResp.WebContentLink
-			}
-		}
+	// 4. 视频逻辑：维持你觉得“很快”的原版 Medias 逻辑
+	if !d.DisableMediaLink && len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
+		log.Debugln("use media link")
+		url = resp.Medias[0].Link.Url
 	}
 
-	// 3. 处理代理
+	// 5. 代理逻辑 (修正原版拼接)
 	if d.Addition.UseProxy {
-		url = utils.JoinURL(d.Addition.ProxyUrl, url)
+		proxyUrl := strings.TrimSuffix(d.Addition.ProxyUrl, "/")
+		targetUrl := strings.TrimPrefix(url, "/")
+		url = proxyUrl + "/" + targetUrl
 	}
 
 	return &model.Link{URL: url}, nil
-}
-
-func (d *PikPakProxy) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
-	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
-		req.SetContext(ctx).SetBody(base.Json{
-			"kind":      "drive#folder",
-			"parent_id": parentDir.GetID(),
-			"name":      dirName,
-		})
-	}, nil)
-	return err
-}
-
-func (d *PikPakProxy) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
-	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchMove", http.MethodPost, func(req *resty.Request) {
-		req.SetContext(ctx).SetBody(base.Json{
-			"ids": []string{srcObj.GetID()},
-			"to": base.Json{
-				"parent_id": dstDir.GetID(),
-			},
-		})
-	}, nil)
-	return err
 }
 
 func (d *PikPakProxy) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
