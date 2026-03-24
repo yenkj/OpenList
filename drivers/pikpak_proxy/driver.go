@@ -1,4 +1,4 @@
-package pikpak
+package pikpakproxy
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type PikPak struct {
+type PikPakProxy struct {
 	model.Storage
 	Addition
 	*Common
@@ -27,15 +27,15 @@ type PikPak struct {
 	AccessToken  string
 }
 
-func (d *PikPak) Config() driver.Config {
+func (d *PikPakProxy) Config() driver.Config {
 	return config
 }
 
-func (d *PikPak) GetAddition() driver.Additional {
+func (d *PikPakProxy) GetAddition() driver.Additional {
 	return &d.Addition
 }
 
-func (d *PikPak) Init(ctx context.Context) (err error) {
+func (d *PikPakProxy) Init(ctx context.Context) (err error) {
 	if d.Common == nil {
 		d.Common = &Common{
 			client:       base.NewRestyClient(),
@@ -47,6 +47,8 @@ func (d *PikPak) Init(ctx context.Context) (err error) {
 				d.Common.CaptchaToken = token
 				op.MustSaveDriverStorage(d)
 			},
+			UseProxy: d.Addition.UseProxy,
+			ProxyUrl: d.Addition.ProxyUrl,
 		}
 	}
 
@@ -113,11 +115,11 @@ func (d *PikPak) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-func (d *PikPak) Drop(ctx context.Context) error {
+func (d *PikPakProxy) Drop(ctx context.Context) error {
 	return nil
 }
 
-func (d *PikPak) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
+func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	files, err := d.getFiles(dir.GetID())
 	if err != nil {
 		return nil, err
@@ -127,7 +129,7 @@ func (d *PikPak) List(ctx context.Context, dir model.Obj, args model.ListArgs) (
 	})
 }
 
-func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
 	var url string
 	queryParams := map[string]string{
@@ -152,13 +154,21 @@ func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		log.Debugln("use media link")
 		url = resp.Medias[0].Link.Url
 	}
+	if d.Addition.UseProxy {
+		if strings.HasSuffix(d.Addition.ProxyUrl, "/") {
+			url = d.Addition.ProxyUrl + url
+		} else {
+			url = d.Addition.ProxyUrl + "/" + url
+		}
+
+	}
 
 	return &model.Link{
 		URL: url,
 	}, nil
 }
 
-func (d *PikPak) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
+func (d *PikPakProxy) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"kind":      "drive#folder",
@@ -169,7 +179,7 @@ func (d *PikPak) MakeDir(ctx context.Context, parentDir model.Obj, dirName strin
 	return err
 }
 
-func (d *PikPak) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
+func (d *PikPakProxy) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchMove", http.MethodPost, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
@@ -181,7 +191,7 @@ func (d *PikPak) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 	return err
 }
 
-func (d *PikPak) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+func (d *PikPakProxy) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files/"+srcObj.GetID(), http.MethodPatch, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"name": newName,
@@ -190,7 +200,7 @@ func (d *PikPak) Rename(ctx context.Context, srcObj model.Obj, newName string) e
 	return err
 }
 
-func (d *PikPak) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
+func (d *PikPakProxy) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchCopy", http.MethodPost, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
@@ -202,7 +212,7 @@ func (d *PikPak) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	return err
 }
 
-func (d *PikPak) Remove(ctx context.Context, obj model.Obj) error {
+func (d *PikPakProxy) Remove(ctx context.Context, obj model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchTrash", http.MethodPost, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{obj.GetID()},
@@ -211,7 +221,7 @@ func (d *PikPak) Remove(ctx context.Context, obj model.Obj) error {
 	return err
 }
 
-func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+func (d *PikPakProxy) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	sha1Str := stream.GetHash().GetHash(hash_extend.GCID)
 
 	if len(sha1Str) < hash_extend.GCID.Width {
@@ -259,7 +269,7 @@ func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 	return d.UploadByMultipart(ctx, &params, stream.GetSize(), stream, up)
 }
 
-func (d *PikPak) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+func (d *PikPakProxy) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
 	var about AboutResponse
 	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/about", http.MethodGet, func(req *resty.Request) {
 		req.SetContext(ctx)
@@ -284,7 +294,7 @@ func (d *PikPak) GetDetails(ctx context.Context) (*model.StorageDetails, error) 
 }
 
 // 离线下载文件
-func (d *PikPak) OfflineDownload(ctx context.Context, fileUrl string, parentDir model.Obj, fileName string) (*OfflineTask, error) {
+func (d *PikPakProxy) OfflineDownload(ctx context.Context, fileUrl string, parentDir model.Obj, fileName string) (*OfflineTask, error) {
 	requestBody := base.Json{
 		"kind":        "drive#file",
 		"name":        fileName,
@@ -313,7 +323,7 @@ func (d *PikPak) OfflineDownload(ctx context.Context, fileUrl string, parentDir 
 phase 可能的取值：
 PHASE_TYPE_RUNNING, PHASE_TYPE_ERROR, PHASE_TYPE_COMPLETE, PHASE_TYPE_PENDING
 */
-func (d *PikPak) OfflineList(ctx context.Context, nextPageToken string, phase []string) ([]OfflineTask, error) {
+func (d *PikPakProxy) OfflineList(ctx context.Context, nextPageToken string, phase []string) ([]OfflineTask, error) {
 	res := make([]OfflineTask, 0)
 	url := "https://api-drive.mypikpak.net/drive/v1/tasks"
 
@@ -354,7 +364,7 @@ func (d *PikPak) OfflineList(ctx context.Context, nextPageToken string, phase []
 	return res, nil
 }
 
-func (d *PikPak) DeleteOfflineTasks(ctx context.Context, taskIDs []string, deleteFiles bool) error {
+func (d *PikPakProxy) DeleteOfflineTasks(ctx context.Context, taskIDs []string, deleteFiles bool) error {
 	url := "https://api-drive.mypikpak.net/drive/v1/tasks"
 	params := map[string]string{
 		"task_ids":     strings.Join(taskIDs, ","),
@@ -370,4 +380,4 @@ func (d *PikPak) DeleteOfflineTasks(ctx context.Context, taskIDs []string, delet
 	return nil
 }
 
-var _ driver.Driver = (*PikPak)(nil)
+var _ driver.Driver = (*PikPakProxy)(nil)
