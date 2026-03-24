@@ -1,4 +1,4 @@
-package pikpakproxy
+package pikpak
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type PikPakProxy struct {
+type PikPak struct {
 	model.Storage
 	Addition
 	*Common
@@ -27,15 +27,15 @@ type PikPakProxy struct {
 	AccessToken  string
 }
 
-func (d *PikPakProxy) Config() driver.Config {
+func (d *PikPak) Config() driver.Config {
 	return config
 }
 
-func (d *PikPakProxy) GetAddition() driver.Additional {
+func (d *PikPak) GetAddition() driver.Additional {
 	return &d.Addition
 }
 
-func (d *PikPakProxy) Init(ctx context.Context) (err error) {
+func (d *PikPak) Init(ctx context.Context) (err error) {
 	if d.Common == nil {
 		d.Common = &Common{
 			client:       base.NewRestyClient(),
@@ -47,8 +47,6 @@ func (d *PikPakProxy) Init(ctx context.Context) (err error) {
 				d.Common.CaptchaToken = token
 				op.MustSaveDriverStorage(d)
 			},
-			UseProxy: d.Addition.UseProxy,
-			ProxyUrl: d.Addition.ProxyUrl,
 		}
 	}
 
@@ -115,11 +113,11 @@ func (d *PikPakProxy) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-func (d *PikPakProxy) Drop(ctx context.Context) error {
+func (d *PikPak) Drop(ctx context.Context) error {
 	return nil
 }
 
-func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
+func (d *PikPak) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	files, err := d.getFiles(dir.GetID())
 	if err != nil {
 		return nil, err
@@ -129,68 +127,70 @@ func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListAr
 	})
 }
 
-func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
 	var url string
-	
-	// 1. 完全回归原版请求参数
-	usage := "FETCH"
-	if !d.DisableMediaLink {
-		usage = "CACHE"
-	}
-
 	queryParams := map[string]string{
 		"_magic":         "2021",
-		"usage":          usage,
+		"usage":          "FETCH",
 		"thumbnail_size": "SIZE_LARGE",
 	}
-
-	// 2. 发起第一次请求 (这步和原版完全一致，保证了视频拿到最快的节点)
+	if !d.DisableMediaLink {
+		queryParams["usage"] = "CACHE"
+	}
 	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
-			req.SetContext(ctx).SetQueryParams(queryParams)
+			req.SetContext(ctx).
+				SetQueryParams(queryParams)
 		}, &resp)
 	if err != nil {
 		return nil, err
 	}
 	url = resp.WebContentLink
 
-	// 3. 核心分流：针对“非视频”且“开启了加速”的情况做补救
-	if usage == "CACHE" {
-		// 只有视频/音频才算真正的 Media
-		isMedia := len(resp.Medias) > 0 && (resp.Medias[0].Category == "VIDEO" || resp.Medias[0].Category == "AUDIO")
-		
-		if isMedia {
-			// 视频：直接用 Medias 链接（这就是你觉得快的那个）
-			if resp.Medias[0].Link.Url != "" {
-				url = resp.Medias[0].Link.Url
-			}
-		} else {
-			// 图片、字幕、压缩包：它们在 CACHE 下会变 HTML，所以必须补救
-			// 只有这些文件会多花一点时间去重新获取 FETCH 链接
-			var fetchResp File
-			_, _ = d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
-				http.MethodGet, func(req *resty.Request) {
-					req.SetContext(ctx).SetQueryParams(map[string]string{
-						"_magic": "2021",
-						"usage":  "FETCH",
-					})
-				}, &fetchResp)
-			if fetchResp.WebContentLink != "" {
-				url = fetchResp.WebContentLink
-			}
-		}
+	if !d.DisableMediaLink && len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
+		log.Debugln("use media link")
+		url = resp.Medias[0].Link.Url
 	}
 
-	// 4. 代理逻辑 (使用最简单的拼接，防止 utils.JoinURL 报错)
-	if d.Addition.UseProxy {
-		url = strings.TrimSuffix(d.Addition.ProxyUrl, "/") + "/" + strings.TrimPrefix(url, "/")
-	}
-
-	return &model.Link{URL: url}, nil
+	return &model.Link{
+		URL: url,
+	}, nil
 }
 
-func (d *PikPakProxy) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
+func (d *PikPak) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files", http.MethodPost, func(req *resty.Request) {
+		req.SetContext(ctx).SetBody(base.Json{
+			"kind":      "drive#folder",
+			"parent_id": parentDir.GetID(),
+			"name":      dirName,
+		})
+	}, nil)
+	return err
+}
+
+func (d *PikPak) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchMove", http.MethodPost, func(req *resty.Request) {
+		req.SetContext(ctx).SetBody(base.Json{
+			"ids": []string{srcObj.GetID()},
+			"to": base.Json{
+				"parent_id": dstDir.GetID(),
+			},
+		})
+	}, nil)
+	return err
+}
+
+func (d *PikPak) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files/"+srcObj.GetID(), http.MethodPatch, func(req *resty.Request) {
+		req.SetContext(ctx).SetBody(base.Json{
+			"name": newName,
+		})
+	}, nil)
+	return err
+}
+
+func (d *PikPak) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchCopy", http.MethodPost, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{srcObj.GetID()},
@@ -202,7 +202,7 @@ func (d *PikPakProxy) Copy(ctx context.Context, srcObj, dstDir model.Obj) error 
 	return err
 }
 
-func (d *PikPakProxy) Remove(ctx context.Context, obj model.Obj) error {
+func (d *PikPak) Remove(ctx context.Context, obj model.Obj) error {
 	_, err := d.request("https://api-drive.mypikpak.net/drive/v1/files:batchTrash", http.MethodPost, func(req *resty.Request) {
 		req.SetContext(ctx).SetBody(base.Json{
 			"ids": []string{obj.GetID()},
@@ -211,7 +211,7 @@ func (d *PikPakProxy) Remove(ctx context.Context, obj model.Obj) error {
 	return err
 }
 
-func (d *PikPakProxy) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	sha1Str := stream.GetHash().GetHash(hash_extend.GCID)
 
 	if len(sha1Str) < hash_extend.GCID.Width {
@@ -259,7 +259,7 @@ func (d *PikPakProxy) Put(ctx context.Context, dstDir model.Obj, stream model.Fi
 	return d.UploadByMultipart(ctx, &params, stream.GetSize(), stream, up)
 }
 
-func (d *PikPakProxy) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+func (d *PikPak) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
 	var about AboutResponse
 	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/about", http.MethodGet, func(req *resty.Request) {
 		req.SetContext(ctx)
@@ -284,7 +284,7 @@ func (d *PikPakProxy) GetDetails(ctx context.Context) (*model.StorageDetails, er
 }
 
 // 离线下载文件
-func (d *PikPakProxy) OfflineDownload(ctx context.Context, fileUrl string, parentDir model.Obj, fileName string) (*OfflineTask, error) {
+func (d *PikPak) OfflineDownload(ctx context.Context, fileUrl string, parentDir model.Obj, fileName string) (*OfflineTask, error) {
 	requestBody := base.Json{
 		"kind":        "drive#file",
 		"name":        fileName,
@@ -313,7 +313,7 @@ func (d *PikPakProxy) OfflineDownload(ctx context.Context, fileUrl string, paren
 phase 可能的取值：
 PHASE_TYPE_RUNNING, PHASE_TYPE_ERROR, PHASE_TYPE_COMPLETE, PHASE_TYPE_PENDING
 */
-func (d *PikPakProxy) OfflineList(ctx context.Context, nextPageToken string, phase []string) ([]OfflineTask, error) {
+func (d *PikPak) OfflineList(ctx context.Context, nextPageToken string, phase []string) ([]OfflineTask, error) {
 	res := make([]OfflineTask, 0)
 	url := "https://api-drive.mypikpak.net/drive/v1/tasks"
 
@@ -354,7 +354,7 @@ func (d *PikPakProxy) OfflineList(ctx context.Context, nextPageToken string, pha
 	return res, nil
 }
 
-func (d *PikPakProxy) DeleteOfflineTasks(ctx context.Context, taskIDs []string, deleteFiles bool) error {
+func (d *PikPak) DeleteOfflineTasks(ctx context.Context, taskIDs []string, deleteFiles bool) error {
 	url := "https://api-drive.mypikpak.net/drive/v1/tasks"
 	params := map[string]string{
 		"task_ids":     strings.Join(taskIDs, ","),
@@ -370,4 +370,4 @@ func (d *PikPakProxy) DeleteOfflineTasks(ctx context.Context, taskIDs []string, 
 	return nil
 }
 
-var _ driver.Driver = (*PikPakProxy)(nil)
+var _ driver.Driver = (*PikPak)(nil)
