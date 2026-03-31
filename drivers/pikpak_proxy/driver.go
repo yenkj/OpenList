@@ -132,28 +132,45 @@ func (d *PikPakProxy) List(ctx context.Context, dir model.Obj, args model.ListAr
 func (d *PikPakProxy) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp File
 	var url string
+	
 	queryParams := map[string]string{
 		"_magic":         "2021",
 		"usage":          "FETCH",
 		"thumbnail_size": "SIZE_LARGE",
 	}
+	
 	if !d.DisableMediaLink {
 		queryParams["usage"] = "CACHE"
 	}
+	
 	_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
 		http.MethodGet, func(req *resty.Request) {
 			req.SetContext(ctx).
 				SetQueryParams(queryParams)
 		}, &resp)
 	if err != nil {
-		return nil, err
-	}
+		return nil, err	}
+	
 	url = resp.WebContentLink
 
-	if !d.DisableMediaLink && len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
-		log.Debugln("use media link")
-		url = resp.Medias[0].Link.Url
+	if !d.DisableMediaLink {
+		if len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
+			log.Debugln("use media link")
+			url = resp.Medias[0].Link.Url
+		} else {
+			log.Debugln("no media link, fallback to FETCH")
+			queryParams["usage"] = "FETCH"
+			_, err := d.request(fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/files/%s", file.GetID()),
+				http.MethodGet, func(req *resty.Request) {
+					req.SetContext(ctx).
+						SetQueryParams(queryParams)
+				}, &resp)
+			if err == nil {
+				url = resp.WebContentLink
+			}
+		}
 	}
+	
 	if d.Addition.UseProxy {
 		if strings.HasSuffix(d.Addition.ProxyUrl, "/") {
 			url = d.Addition.ProxyUrl + url
@@ -381,3 +398,4 @@ func (d *PikPakProxy) DeleteOfflineTasks(ctx context.Context, taskIDs []string, 
 }
 
 var _ driver.Driver = (*PikPakProxy)(nil)
+
