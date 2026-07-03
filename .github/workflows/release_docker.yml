@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       manual_tag:
-        description: 'Tag name (like v0.1.0).'
+        description: 'Tag name (like v0.1.0). Required if as_latest is true.'
         required: false
         type: string
       as_latest:
