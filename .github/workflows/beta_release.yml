@@ -40,12 +40,15 @@ jobs:
           npx changelogithub --output CHANGELOG.md
 
       - name: Upload assets to beta release
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: CHANGELOG.md
-          files: CHANGELOG.md
-          prerelease: true
-          tag_name: beta
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view beta; then
+            gh release create beta --prerelease --notes-file CHANGELOG.md
+          else
+            gh release edit beta --prerelease --notes-file CHANGELOG.md
+          fi
+          gh release upload beta "CHANGELOG.md" --clobber
 
       - name: Upload assets to github artifact
         uses: actions/upload-artifact@v7
@@ -164,13 +167,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # See above
       - name: Upload assets to beta release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: build/compress/*
-          prerelease: true
-          tag_name: beta
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for file in build/compress/*; do
+            gh release upload beta "$file" --clobber
+          done
 
       - name: Clean illegal characters from matrix.target
         id: clean_target_name
