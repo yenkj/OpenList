@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       manual_tag:
-        description: 'Tag name (like v0.1.0). Required if as_latest is true.'
+        description: 'Tag name (like v0.1.0).'
         required: false
         type: string
       as_latest:
@@ -216,8 +216,25 @@ jobs:
           #     INSTALL_ARIA2=true
           #   tag_favor: "suffix=-lite-aio,onlatest=true"
     steps:
+      - name: Set image tag
+        id: set_tag
+        run: |
+          if [ -n "${{ github.event.inputs.manual_tag }}" ]; then
+            echo "IMAGE_TAG=${{ github.event.inputs.manual_tag }}" >> $GITHUB_ENV
+          else
+            # 获取最新的 git tag，如果没有则使用日期时间
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$LATEST_TAG" ]; then
+              echo "IMAGE_TAG=${LATEST_TAG}-dev" >> $GITHUB_ENV
+            else
+              echo "IMAGE_TAG=$(date +v%Y%m%d-%H%M)" >> $GITHUB_ENV
+            fi
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # 获取完整历史以读取 tags
       - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME_LITE }}
@@ -240,10 +257,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.GHCR_ORG_NAME }}/${{ env.IMAGE_NAME }}
-          tags: >
-            ${{ github.event_name == 'workflow_dispatch'
-                && format('type=raw,value={0}', github.event.inputs.manual_tag)
-              || format('type=raw,value={0}', github.ref_name) }}
+          tags: type=raw,value=${{ env.IMAGE_TAG }}
           flavor: |
             latest=${{ github.event_name == 'push' || github.event.inputs.as_latest == 'true' }}
             ${{ matrix.tag_favor }}
