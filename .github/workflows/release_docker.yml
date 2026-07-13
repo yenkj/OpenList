@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -48,7 +48,7 @@ jobs:
 
       - name: Cache Musl
         id: cache-musl
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/musl-libs
           key: docker-musl-libs-v2
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -88,7 +88,7 @@ jobs:
 
       - name: Cache Musl
         id: cache-musl
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/musl-libs
           key: docker-musl-libs-v2
@@ -142,8 +142,8 @@ jobs:
           #   tag_favor: "suffix=-aio,onlatest=true"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+        uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: 'build/'
@@ -232,10 +232,10 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # 获取完整历史以读取 tags
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ env.ARTIFACT_NAME_LITE }}
           path: 'build/'
