@@ -9,16 +9,17 @@ import (
 	"crypto/sha1"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"encoding/xml"
 	"fmt"
-	"math"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/torrent"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils/random"
 )
@@ -102,7 +103,13 @@ func MustParseTime(str string) *time.Time {
 
 type Time time.Time
 
-func (t *Time) UnmarshalJSON(b []byte) error { return t.Unmarshal(b) }
+func (t *Time) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	return t.Unmarshal([]byte(s))
+}
 func (t *Time) UnmarshalXML(e *xml.Decoder, ee xml.StartElement) error {
 	b, err := e.Token()
 	if err != nil {
@@ -207,15 +214,11 @@ func BoolToNumber(b bool) int {
 // 对分片数量有限制
 // 10MIB 20 MIB 999片
 // 50MIB 60MIB 70MIB 80MIB ∞MIB 1999片
+//
+// 规则由文件大小唯一决定，与用户配置无关；实现放在 pkg/torrent.CASSliceSize，
+// 保证上传侧、种子生成侧、秒传侧共用同一份定义。
 func partSize(size int64) int64 {
-	const DEFAULT = 1024 * 1024 * 10 // 10MIB
-	if size > DEFAULT*2*999 {
-		return int64(math.Max(math.Ceil((float64(size)/1999) /*=单个切片大小*/ /float64(DEFAULT)) /*=倍率*/, 5) * DEFAULT)
-	}
-	if size > DEFAULT*999 {
-		return DEFAULT * 2 // 20MIB
-	}
-	return DEFAULT
+	return torrent.CASSliceSize(size)
 }
 
 func isBool(bs ...bool) bool {

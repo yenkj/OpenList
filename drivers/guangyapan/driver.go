@@ -186,14 +186,17 @@ func (d *GuangYaPan) List(ctx context.Context, dir model.Obj, args model.ListArg
 	for page := 0; page < maxPage; page++ {
 		var resp listResp
 		body := map[string]any{
-			"parentId":  parentID,
-			"page":      page,
-			"pageSize":  d.PageSize,
-			"orderBy":   d.OrderBy,
-			"sortType":  d.SortType,
+			"parentId": parentID,
+			"page":     page,
+			"pageSize": d.PageSize,
+			"orderBy":  d.OrderBy,
+			"sortType": d.SortType,
 		}
 		if err := d.postAPI(ctx, "/userres/v1/file/get_file_list", body, &resp); err != nil {
 			return nil, err
+		}
+		if !isSuccessMsg(resp.Msg) {
+			return nil, fmt.Errorf("list files failed: code=%d msg=%s", resp.Code, strings.TrimSpace(resp.Msg))
 		}
 		for _, item := range resp.Data.List {
 			res = append(res, &model.Object{
@@ -394,7 +397,13 @@ func (d *GuangYaPan) Put(ctx context.Context, dstDir model.Obj, file model.FileS
 
 	parentID := dstDir.GetID()
 
-	token, code, err := d.getUploadToken(ctx, parentID, name, file.GetSize())
+	// 优先秒传：先计算文件 MD5，后端命中相同文件时直接秒传完成，无需真实上传。
+	md5sum, err := d.fileMD5(file, up)
+	if err != nil {
+		return nil, err
+	}
+
+	token, code, err := d.getUploadToken(ctx, parentID, name, file.GetSize(), md5sum)
 	if err != nil {
 		return nil, err
 	}
@@ -526,14 +535,17 @@ func (d *GuangYaPan) findChildFolderID(ctx context.Context, parentID, name strin
 	for page := 0; page < maxPage; page++ {
 		var resp listResp
 		body := map[string]any{
-			"parentId":  parentID,
-			"page":      page,
-			"pageSize":  pageSize,
-			"orderBy":   d.OrderBy,
-			"sortType":  d.SortType,
+			"parentId": parentID,
+			"page":     page,
+			"pageSize": pageSize,
+			"orderBy":  d.OrderBy,
+			"sortType": d.SortType,
 		}
 		if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/get_file_list", body, &resp); err != nil {
 			return "", err
+		}
+		if !isSuccessMsg(resp.Msg) {
+			return "", fmt.Errorf("list files failed: code=%d msg=%s", resp.Code, strings.TrimSpace(resp.Msg))
 		}
 		for _, item := range resp.Data.List {
 			seen++
